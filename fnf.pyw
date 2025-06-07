@@ -1,3 +1,5 @@
+# testing the update thing
+
 import customtkinter as ctk
 import os
 import subprocess
