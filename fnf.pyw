@@ -258,12 +258,181 @@ class UpdateWindow(ctk.CTk):
             except:
                 pass
 
+def load_settings():
+    settings_path = os.path.join(script_dir, "settings.json")
+    default_settings = {
+        "dark_mode": True,
+        "auto_maximize": False,
+        "grid_layout": True,
+        "auto_update": None  # None means not set yet
+    }
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, "r") as f:
+                return json.load(f)
+        except:
+            return default_settings
+    return default_settings
+
+def save_settings(settings):
+    settings_path = os.path.join(script_dir, "settings.json")
+    with open(settings_path, "w") as f:
+        json.dump(settings, f)
+
+class InitialUpdateDialog(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Auto-Update Preference")
+        self.geometry("400x200")
+        self.resizable(False, False)
+        
+        # Make it modal
+        self.transient(parent)
+        self.grab_set()
+        
+        # Center the window
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
+        
+        # Add message
+        self.label = ctk.CTkLabel(
+            self,
+            text="Would you like to enable automatic updates?\nThe launcher will check for updates on startup.",
+            wraplength=350
+        )
+        self.label.pack(pady=(30, 20))
+        
+        # Add buttons
+        button_frame = ctk.CTkFrame(self)
+        button_frame.pack(pady=20)
+        
+        def set_auto_update(value):
+            settings = load_settings()
+            settings["auto_update"] = value
+            save_settings(settings)
+            self.destroy()
+        
+        self.yes_button = ctk.CTkButton(
+            button_frame,
+            text="Yes",
+            command=lambda: set_auto_update(True),
+            width=100,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        self.yes_button.pack(side="left", padx=10)
+        
+        self.no_button = ctk.CTkButton(
+            button_frame,
+            text="No",
+            command=lambda: set_auto_update(False),
+            width=100,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        self.no_button.pack(side="left", padx=10)
+
+class SettingsWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Settings")
+        self.geometry("400x350")  # Made taller for new setting
+        self.resizable(False, False)
+        
+        # Load current settings
+        self.settings = load_settings()
+        
+        # Theme mode
+        self.theme_label = ctk.CTkLabel(self, text="Theme Mode:")
+        self.theme_label.pack(pady=(20, 5))
+        
+        self.theme_var = ctk.StringVar(value="dark" if self.settings["dark_mode"] else "light")
+        self.theme_switch = ctk.CTkSwitch(
+            self, 
+            text="Dark Mode", 
+            variable=self.theme_var,
+            onvalue="dark",
+            offvalue="light",
+            command=self.update_theme
+        )
+        self.theme_switch.pack(pady=5)
+        
+        # Auto maximize
+        self.maximize_label = ctk.CTkLabel(self, text="Game Launch Settings:")
+        self.maximize_label.pack(pady=(20, 5))
+        
+        self.maximize_var = ctk.BooleanVar(value=self.settings["auto_maximize"])
+        self.maximize_switch = ctk.CTkSwitch(
+            self, 
+            text="Auto Maximize Game", 
+            variable=self.maximize_var,
+            command=self.update_settings
+        )
+        self.maximize_switch.pack(pady=5)
+        
+        # Layout
+        self.layout_label = ctk.CTkLabel(self, text="Layout Settings:")
+        self.layout_label.pack(pady=(20, 5))
+        
+        self.layout_var = ctk.BooleanVar(value=self.settings["grid_layout"])
+        self.layout_switch = ctk.CTkSwitch(
+            self, 
+            text="Grid Layout", 
+            variable=self.layout_var,
+            command=self.update_settings
+        )
+        self.layout_switch.pack(pady=5)
+        
+        # Auto Update
+        self.update_label = ctk.CTkLabel(self, text="Update Settings:")
+        self.update_label.pack(pady=(20, 5))
+        
+        self.update_var = ctk.BooleanVar(value=self.settings["auto_update"])
+        self.update_switch = ctk.CTkSwitch(
+            self, 
+            text="Auto Update", 
+            variable=self.update_var,
+            command=self.update_settings
+        )
+        self.update_switch.pack(pady=5)
+        
+        # Close button
+        self.close_button = ctk.CTkButton(
+            self,
+            text="Close",
+            command=self.destroy,
+            width=200,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        self.close_button.pack(pady=20)
+    
+    def update_theme(self):
+        mode = self.theme_var.get()
+        ctk.set_appearance_mode(mode)
+        self.settings["dark_mode"] = (mode == "dark")
+        save_settings(self.settings)
+    
+    def update_settings(self):
+        self.settings["auto_maximize"] = self.maximize_var.get()
+        self.settings["grid_layout"] = self.layout_var.get()
+        self.settings["auto_update"] = self.update_var.get()
+        save_settings(self.settings)
+
 class Launcher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("FNF Launcher")
         self.geometry("740x700")
         self.resizable(False, False)
+
+        # Load settings
+        self.settings = load_settings()
+        ctk.set_appearance_mode("dark" if self.settings["dark_mode"] else "light")
 
         self.path = load_path()
         if not os.path.exists(self.path):
@@ -272,6 +441,19 @@ class Launcher(ctk.CTk):
         self.folders = get_folders(self.path)
         self.filtered = self.folders.copy()
 
+        # Add settings button
+        self.settings_button = ctk.CTkButton(
+            self,
+            text="⚙️",
+            width=40,
+            height=40,
+            command=self.show_settings,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2",
+            corner_radius=20
+        )
+        self.settings_button.place(relx=1.0, rely=0.0, x=-10, y=10, anchor="ne")
+
         self.search = ctk.CTkEntry(self, placeholder_text="Search...", width=700)
         self.search.pack(pady=(20, 10))
         self.search.bind("<KeyRelease>", self.update_list)
@@ -279,7 +461,15 @@ class Launcher(ctk.CTk):
         self.scroll_frame = ctk.CTkScrollableFrame(self, width=700, height=560)
         self.scroll_frame.pack()
 
-        self.import_button = ctk.CTkButton(self, text="Import Mod", corner_radius=20, command=self.show_import_ui, width=700)
+        self.import_button = ctk.CTkButton(
+            self, 
+            text="Import Mod", 
+            corner_radius=20, 
+            command=self.show_import_ui, 
+            width=700,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
         self.import_button.pack(pady=10)
 
         self.progress = ctk.CTkProgressBar(self, width=700)
@@ -299,12 +489,22 @@ class Launcher(ctk.CTk):
         else:
             self.destroy()
 
+    def show_settings(self):
+        settings_window = SettingsWindow(self)
+        settings_window.grab_set()  # Make the settings window modal
+
     def update_list(self, event=None):
         query = self.search.get().lower()
         self.filtered = [f for f in self.folders if query in f.lower()]
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
 
+        if self.settings["grid_layout"]:
+            self.update_grid_layout()
+        else:
+            self.update_list_layout()
+
+    def update_grid_layout(self):
         cols = 3
         row = 0
         col = 0
@@ -369,6 +569,63 @@ class Launcher(ctk.CTk):
                 col = 0
                 row += 1
 
+    def update_list_layout(self):
+        for folder in self.filtered:
+            full_path = os.path.join(self.path, folder)
+            exe_path = find_exe(full_path)
+
+            img = None
+            if exe_path:
+                if exe_path in self.icon_cache:
+                    img = self.icon_cache[exe_path]
+                else:
+                    pil_icon = get_icon_from_exe(exe_path)
+                    if not pil_icon:
+                        pil_icon = get_icon_from_ico_folder(full_path)
+                    if pil_icon:
+                        img = ctk.CTkImage(pil_icon, size=(32, 32))
+                        self.icon_cache[exe_path] = img
+
+            frame = ctk.CTkFrame(self.scroll_frame, width=700, height=60, corner_radius=15)
+            frame.pack(padx=10, pady=5, fill="x")
+
+            def launch_func(f=folder):
+                self.launch_exe(f)
+
+            btn = ctk.CTkButton(
+                frame, 
+                image=img, 
+                text=folder, 
+                width=600, 
+                height=40, 
+                compound="left", 
+                command=launch_func,
+                fg_color="#2a2a2a",
+                hover_color="#8A2BE2",
+                corner_radius=15
+            )
+            btn.pack(side="left", padx=10, pady=10)
+
+            def delete_mod(f=folder):
+                full = os.path.join(self.path, f)
+                try:
+                    shutil.rmtree(full)
+                except:
+                    pass
+                self.refresh()
+
+            del_btn = ctk.CTkButton(
+                frame,
+                text="✕",
+                width=30,
+                height=30,
+                fg_color="#2a2a2a",
+                hover_color="#8A2BE2",
+                corner_radius=15,
+                command=delete_mod
+            )
+            del_btn.pack(side="right", padx=10, pady=10)
+
     def launch_exe(self, folder):
         full_path = os.path.join(self.path, folder)
         exe = find_exe(full_path)
@@ -376,7 +633,14 @@ class Launcher(ctk.CTk):
             print("no exe found")
             return
 
-        subprocess.Popen([exe], cwd=os.path.dirname(exe))
+        # Create startup info for maximize if enabled
+        startupinfo = None
+        if self.settings["auto_maximize"]:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_MAXIMIZE
+
+        subprocess.Popen([exe], cwd=os.path.dirname(exe), startupinfo=startupinfo)
         self.destroy()
 
     def refresh(self):
@@ -764,7 +1028,22 @@ class Launcher(ctk.CTk):
 def main():
     # Check for updates before starting the main application
     update_window = UpdateWindow()
-    update_window.start_update()
+    
+    # Check if auto-update preference is set
+    settings = load_settings()
+    if settings["auto_update"] is None:
+        # Show initial dialog
+        dialog = InitialUpdateDialog(update_window)
+        dialog.wait_window()
+        # Reload settings after dialog
+        settings = load_settings()
+    
+    # Only check for updates if auto-update is enabled
+    if settings["auto_update"]:
+        update_window.start_update()
+    else:
+        update_window.destroy()
+    
     update_window.mainloop()
     
     # Start the main application
