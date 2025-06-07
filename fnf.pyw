@@ -1,5 +1,3 @@
-# testing the update thing
-
 import customtkinter as ctk
 import os
 import subprocess
@@ -28,8 +26,8 @@ if scripts_dir not in os.environ['PATH']:
     os.environ['PATH'] = scripts_dir + os.pathsep + os.environ['PATH']
 
 # GitHub repository information
-GITHUB_REPO = "your-username/FNFML"  # Replace with your actual GitHub repo
-GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
+GITHUB_REPO = "notif4ir/FNFML"  # Your GitHub repo
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/notif4ir/FNFML/refs/heads/main"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}"
 
 def save_path(path):
@@ -127,17 +125,24 @@ def get_file_hash(file_path):
 def check_for_updates():
     """Check if there's a newer version available"""
     try:
-        # Get the latest release info from GitHub
-        response = requests.get(f"{GITHUB_API_URL}/releases/latest", timeout=5)  # Add timeout
+        # Get the current file content
+        current_file = os.path.abspath(__file__)
+        current_hash = get_file_hash(current_file)
+        
+        # Get the GitHub file content
+        response = requests.get(f"{GITHUB_RAW_URL}/fnf.pyw", timeout=5)
         if response.status_code != 200:
             print("Could not reach GitHub, skipping update check")
             return None
+            
+        # Calculate hash of GitHub content
+        github_content = response.content
+        github_hash = hashlib.sha256(github_content).hexdigest()
         
-        latest_version = response.json()["tag_name"]
-        current_version = "1.0.0"  # Replace with your current version
-        
-        if latest_version > current_version:
-            return latest_version
+        # Compare hashes
+        if github_hash != current_hash:
+            print("New version found on GitHub")
+            return "new_version"  # Return any non-None value to trigger update
         return None
     except (requests.RequestException, Exception) as e:
         print(f"Error checking for updates: {e}")
@@ -146,15 +151,8 @@ def check_for_updates():
 def download_update(version, progress_callback):
     """Download the latest version"""
     try:
-        # Get the download URL for the latest release
-        response = requests.get(f"{GITHUB_API_URL}/releases/latest")
-        if response.status_code != 200:
-            raise Exception("Failed to get release info")
-        
-        download_url = response.json()["assets"][0]["browser_download_url"]
-        
-        # Download the file
-        response = requests.get(download_url, stream=True)
+        # Download directly from raw GitHub URL
+        response = requests.get(f"{GITHUB_RAW_URL}/fnf.pyw", stream=True)
         if response.status_code != 200:
             raise Exception("Failed to download update")
         
@@ -163,7 +161,7 @@ def download_update(version, progress_callback):
         downloaded = 0
         
         # Create a temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pyw') as temp_file:
             for data in response.iter_content(block_size):
                 downloaded += len(data)
                 temp_file.write(data)
@@ -211,7 +209,7 @@ class UpdateWindow(ctk.CTk):
                 return
             
             # Download update
-            self.label.configure(text=f"Downloading version {latest_version}...")
+            self.label.configure(text=f"Downloading new version...")
             def update_progress(progress):
                 self.after(0, self.progress.set, progress)
             
@@ -221,76 +219,44 @@ class UpdateWindow(ctk.CTk):
                 self.after(1000, self.destroy)
                 return
             
-            # Extract update
-            self.label.configure(text="Installing update...")
-            self.progress.set(0)
-            
             # Get current file path
             current_file = os.path.abspath(__file__)
             current_dir = os.path.dirname(current_file)
             
-            # Create a temporary directory for extraction
-            temp_extract_dir = os.path.join(current_dir, "_temp_update")
-            if os.path.exists(temp_extract_dir):
-                shutil.rmtree(temp_extract_dir)
-            os.makedirs(temp_extract_dir)
+            # Create a new file with a different name
+            new_file = os.path.join(current_dir, "fnf_new.pyw")
             
-            try:
-                # Extract the update to temp directory
-                with zipfile.ZipFile(update_file, 'r') as zip_ref:
-                    total_files = len(zip_ref.namelist())
-                    for i, file in enumerate(zip_ref.namelist()):
-                        zip_ref.extract(file, temp_extract_dir)
-                        self.after(0, self.progress.set, (i + 1) / total_files)
-                
-                # Find the new Python file in the extracted files
-                new_py_file = None
-                for root, _, files in os.walk(temp_extract_dir):
-                    for file in files:
-                        if file.endswith('.pyw') or file.endswith('.py'):
-                            new_py_file = os.path.join(root, file)
-                            break
-                    if new_py_file:
-                        break
-                
-                if not new_py_file:
-                    raise Exception("Could not find Python file in update")
-                
-                # Create a new file with a different name
-                new_file = os.path.join(current_dir, "fnf_new.pyw")
-                
-                # Copy the new file
-                shutil.copy2(new_py_file, new_file)
-                
-                # Create a batch file to handle the restart
-                batch_file = os.path.join(current_dir, "restart.bat")
-                with open(batch_file, 'w') as f:
-                    f.write('@echo off\n')
-                    f.write('timeout /t 2 /nobreak > nul\n')  # Wait 2 seconds
-                    f.write(f'del "{current_file}"\n')  # Delete old file
-                    f.write(f'ren "{new_file}" "fnf.pyw"\n')  # Rename new file
-                    f.write(f'start "" "fnf.pyw"\n')  # Start new file
-                    f.write('del "%~f0"\n')  # Delete this batch file
-                
-                self.label.configure(text="Update complete!")
-                self.status_label.configure(text="Restarting application...")
-                
-                # Start the batch file and exit
-                subprocess.Popen([batch_file], shell=True)
-                self.after(1000, self.destroy)
-                
-            finally:
-                # Clean up
-                try:
-                    os.unlink(update_file)
-                    shutil.rmtree(temp_extract_dir)
-                except:
-                    pass
+            # Copy the new file
+            shutil.copy2(update_file, new_file)
+            
+            # Create a batch file to handle the restart
+            batch_file = os.path.join(current_dir, "restart.bat")
+            with open(batch_file, 'w') as f:
+                f.write('@echo off\n')
+                f.write('timeout /t 2 /nobreak > nul\n')  # Wait 2 seconds
+                f.write(f'del "{current_file}"\n')  # Delete old file
+                f.write(f'ren "{new_file}" "fnf.pyw"\n')  # Rename new file
+                f.write(f'start "" "fnf.pyw"\n')  # Start new file
+                f.write('del "%~f0"\n')  # Delete this batch file
+            
+            self.label.configure(text="Update complete!")
+            self.status_label.configure(text="Restarting application...")
+            
+            # Start the batch file and exit
+            subprocess.Popen([batch_file], shell=True)
+            self.after(1000, self.destroy)
             
         except Exception as e:
             print(f"Update process error: {e}")
             self.label.configure(text="Starting application...")
             self.after(1000, self.destroy)
+        finally:
+            # Clean up
+            try:
+                if update_file and os.path.exists(update_file):
+                    os.unlink(update_file)
+            except:
+                pass
 
 class Launcher(ctk.CTk):
     def __init__(self):
