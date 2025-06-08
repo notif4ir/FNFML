@@ -52,6 +52,18 @@ def find_exe(path):
 
 def get_icon_from_exe(exe_path, size=(64, 64)):
     try:
+        # First check for custom icon
+        mod_folder = os.path.dirname(exe_path)
+        custom_icon_path = os.path.join(mod_folder, "custom_icon.png")
+        if os.path.exists(custom_icon_path):
+            try:
+                img = Image.open(custom_icon_path)
+                img = img.resize(size, Image.LANCZOS)
+                return img
+            except:
+                pass  # If custom icon fails, fall back to exe icon
+
+        # If no custom icon or it failed, try exe icon
         large, small = ctypes.c_void_p(), ctypes.c_void_p()
         ctypes.windll.shell32.ExtractIconExW(exe_path, 0, ctypes.byref(large), ctypes.byref(small), 1)
         hicon = large.value if large.value else small.value
@@ -104,6 +116,17 @@ def get_icon_from_exe(exe_path, size=(64, 64)):
         return None
 
 def get_icon_from_ico_folder(path, size=(64,64)):
+    # First check for custom icon
+    custom_icon_path = os.path.join(path, "custom_icon.png")
+    if os.path.exists(custom_icon_path):
+        try:
+            img = Image.open(custom_icon_path)
+            img = img.resize(size, Image.LANCZOS)
+            return img
+        except:
+            pass  # If custom icon fails, fall back to ico files
+
+    # If no custom icon or it failed, try ico files
     for file in os.listdir(path):
         if file.lower().endswith(".ico"):
             try:
@@ -340,11 +363,15 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Settings")
-        self.geometry("400x350")  # Made taller for new setting
+        self.geometry("400x500")
         self.resizable(False, False)
+        
+        # Store parent reference
+        self.parent = parent
         
         # Load current settings
         self.settings = load_settings()
+        self.original_settings = self.settings.copy()
         
         # Theme mode
         self.theme_label = ctk.CTkLabel(self, text="Theme Mode:")
@@ -357,7 +384,7 @@ class SettingsWindow(ctk.CTkToplevel):
             variable=self.theme_var,
             onvalue="dark",
             offvalue="light",
-            command=self.update_theme
+            command=self.check_changes
         )
         self.theme_switch.pack(pady=5)
         
@@ -370,7 +397,7 @@ class SettingsWindow(ctk.CTkToplevel):
             self, 
             text="Auto Maximize Game", 
             variable=self.maximize_var,
-            command=self.update_settings
+            command=self.check_changes
         )
         self.maximize_switch.pack(pady=5)
         
@@ -378,14 +405,17 @@ class SettingsWindow(ctk.CTkToplevel):
         self.layout_label = ctk.CTkLabel(self, text="Layout Settings:")
         self.layout_label.pack(pady=(20, 5))
         
-        self.layout_var = ctk.BooleanVar(value=self.settings["grid_layout"])
-        self.layout_switch = ctk.CTkSwitch(
-            self, 
-            text="Grid Layout", 
+        self.layout_var = ctk.StringVar(value="grid" if self.settings["grid_layout"] else "list")
+        self.layout_option = ctk.CTkOptionMenu(
+            self,
+            values=["Grid Layout", "List Layout"],
             variable=self.layout_var,
-            command=self.update_settings
+            fg_color="#2a2a2a",
+            button_color="#8A2BE2",
+            button_hover_color="#9932CC",
+            command=self.check_changes
         )
-        self.layout_switch.pack(pady=5)
+        self.layout_option.pack(pady=5)
         
         # Auto Update
         self.update_label = ctk.CTkLabel(self, text="Update Settings:")
@@ -396,32 +426,94 @@ class SettingsWindow(ctk.CTkToplevel):
             self, 
             text="Auto Update", 
             variable=self.update_var,
-            command=self.update_settings
+            command=self.check_changes
         )
         self.update_switch.pack(pady=5)
         
-        # Close button
-        self.close_button = ctk.CTkButton(
+        # Spacer
+        ctk.CTkLabel(self, text="").pack(pady=20)
+        
+        # Buttons
+        self.apply_button = ctk.CTkButton(
             self,
-            text="Close",
-            command=self.destroy,
-            width=200,
+            text="Apply Changes",
+            command=self.apply_changes,
+            width=180,
+            height=40,
             fg_color="#2a2a2a",
             hover_color="#8A2BE2"
         )
-        self.close_button.pack(pady=20)
+        self.apply_button.pack(side="left", padx=10, pady=20)
+        
+        self.cancel_button = ctk.CTkButton(
+            self,
+            text="Cancel",
+            command=self.cancel_changes,
+            width=180,
+            height=40,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        self.cancel_button.pack(side="right", padx=10, pady=20)
+        
+        # Initially hide buttons
+        self.apply_button.pack_forget()
+        self.cancel_button.pack_forget()
+        
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self.cancel_changes)
     
-    def update_theme(self):
-        mode = self.theme_var.get()
-        ctk.set_appearance_mode(mode)
-        self.settings["dark_mode"] = (mode == "dark")
-        save_settings(self.settings)
+    def check_changes(self, *args):
+        # Check if any setting has changed
+        has_changes = (
+            self.settings["dark_mode"] != (self.theme_var.get() == "dark") or
+            self.settings["auto_maximize"] != self.maximize_var.get() or
+            self.settings["grid_layout"] != (self.layout_var.get() == "Grid Layout") or
+            self.settings["auto_update"] != self.update_var.get()
+        )
+        
+        # Show/hide buttons based on changes
+        if has_changes:
+            self.apply_button.pack(side="left", padx=10, pady=20)
+            self.cancel_button.pack(side="right", padx=10, pady=20)
+        else:
+            self.apply_button.pack_forget()
+            self.cancel_button.pack_forget()
     
-    def update_settings(self):
+    def apply_changes(self):
+        # Update settings with current values
+        self.settings["dark_mode"] = (self.theme_var.get() == "dark")
         self.settings["auto_maximize"] = self.maximize_var.get()
-        self.settings["grid_layout"] = self.layout_var.get()
+        self.settings["grid_layout"] = (self.layout_var.get() == "Grid Layout")
         self.settings["auto_update"] = self.update_var.get()
+        
+        # Save settings
         save_settings(self.settings)
+        
+        # Restart the application
+        self.parent.after(100, self.restart_application)
+    
+    def cancel_changes(self):
+        # Restore original settings
+        self.settings = self.original_settings.copy()
+        save_settings(self.settings)
+        self.destroy()
+    
+    def restart_application(self):
+        # Get the current file path
+        current_file = os.path.abspath(__file__)
+        
+        # Create a batch file to restart the application
+        batch_file = os.path.join(os.path.dirname(current_file), "restart_settings.bat")
+        with open(batch_file, 'w') as f:
+            f.write('@echo off\n')
+            f.write('timeout /t 1 /nobreak > nul\n')  # Wait 1 second
+            f.write(f'start "" "{current_file}"\n')  # Start the application
+            f.write('del "%~f0"\n')  # Delete this batch file
+        
+        # Start the batch file and exit
+        subprocess.Popen([batch_file], shell=True)
+        self.parent.destroy()
 
 class Launcher(ctk.CTk):
     def __init__(self):
@@ -441,9 +533,13 @@ class Launcher(ctk.CTk):
         self.folders = get_folders(self.path)
         self.filtered = self.folders.copy()
 
-        # Add settings button
+        # Create top frame for search and settings
+        self.top_frame = ctk.CTkFrame(self)
+        self.top_frame.pack(fill="x", padx=20, pady=(20, 10))
+
+        # Add settings button to top frame
         self.settings_button = ctk.CTkButton(
-            self,
+            self.top_frame,
             text="⚙️",
             width=40,
             height=40,
@@ -452,10 +548,11 @@ class Launcher(ctk.CTk):
             hover_color="#8A2BE2",
             corner_radius=20
         )
-        self.settings_button.place(relx=1.0, rely=0.0, x=-10, y=10, anchor="ne")
+        self.settings_button.pack(side="right", padx=(10, 0))
 
-        self.search = ctk.CTkEntry(self, placeholder_text="Search...", width=700)
-        self.search.pack(pady=(20, 10))
+        # Add search to top frame
+        self.search = ctk.CTkEntry(self.top_frame, placeholder_text="Search...", width=700)
+        self.search.pack(side="left", fill="x", expand=True)
         self.search.bind("<KeyRelease>", self.update_list)
 
         self.scroll_frame = ctk.CTkScrollableFrame(self, width=700, height=560)
@@ -527,8 +624,8 @@ class Launcher(ctk.CTk):
             frame = ctk.CTkFrame(self.scroll_frame, width=220, height=140, corner_radius=15)
             frame.grid(row=row, column=col, padx=10, pady=10)
 
-            def launch_func(f=folder):
-                self.launch_exe(f)
+            def create_launch_func(f):
+                return lambda: self.launch_exe(f)
 
             btn = ctk.CTkButton(
                 frame, 
@@ -537,32 +634,47 @@ class Launcher(ctk.CTk):
                 width=180, 
                 height=90, 
                 compound="left", 
-                command=launch_func,
+                command=create_launch_func(folder),
                 fg_color="#2a2a2a",
                 hover_color="#8A2BE2",
                 corner_radius=15
             )
             btn.pack(side="left", padx=(10,0), pady=10)
 
-            def delete_mod(f=folder):
-                full = os.path.join(self.path, f)
-                try:
-                    shutil.rmtree(full)
-                except:
-                    pass
-                self.refresh()
+            # Create a frame for the buttons
+            button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            button_frame.place(relx=1.0, rely=0.0, y=10, anchor="ne")
+
+            def create_delete_func(f):
+                return lambda: self.delete_mod(f)
+
+            def create_customize_func(f, b):
+                return lambda: self.show_customize_menu(f, b)
+
+            # Add both buttons to the button frame
+            edit_btn = ctk.CTkButton(
+                button_frame,
+                text="✎",
+                width=30,
+                height=30,
+                fg_color="transparent",
+                hover_color="#8A2BE2",
+                corner_radius=15,
+                command=create_customize_func(folder, btn)
+            )
+            edit_btn.pack(side="right", padx=5)
 
             del_btn = ctk.CTkButton(
-                frame,
+                button_frame,
                 text="✕",
                 width=30,
                 height=30,
-                fg_color="#2a2a2a",
+                fg_color="transparent",
                 hover_color="#8A2BE2",
                 corner_radius=15,
-                command=delete_mod
+                command=create_delete_func(folder)
             )
-            del_btn.place(relx=1.0, rely=0.0, y=10, anchor="ne")
+            del_btn.pack(side="right", padx=5)
 
             col += 1
             if col >= cols:
@@ -586,11 +698,11 @@ class Launcher(ctk.CTk):
                         img = ctk.CTkImage(pil_icon, size=(32, 32))
                         self.icon_cache[exe_path] = img
 
-            frame = ctk.CTkFrame(self.scroll_frame, width=700, height=60, corner_radius=15)
-            frame.pack(padx=10, pady=5, fill="x")
+            frame = ctk.CTkFrame(self.scroll_frame, width=700, height=50, corner_radius=15)
+            frame.pack(padx=10, pady=3, fill="x")
 
-            def launch_func(f=folder):
-                self.launch_exe(f)
+            def create_launch_func(f):
+                return lambda: self.launch_exe(f)
 
             btn = ctk.CTkButton(
                 frame, 
@@ -599,32 +711,197 @@ class Launcher(ctk.CTk):
                 width=600, 
                 height=40, 
                 compound="left", 
-                command=launch_func,
+                command=create_launch_func(folder),
                 fg_color="#2a2a2a",
                 hover_color="#8A2BE2",
                 corner_radius=15
             )
-            btn.pack(side="left", padx=10, pady=10)
+            btn.pack(side="left", padx=10, pady=5)
 
-            def delete_mod(f=folder):
-                full = os.path.join(self.path, f)
-                try:
-                    shutil.rmtree(full)
-                except:
-                    pass
-                self.refresh()
+            # Create a frame for the buttons
+            button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            button_frame.pack(side="right", padx=10, pady=5)
+
+            def create_delete_func(f):
+                return lambda: self.delete_mod(f)
+
+            def create_customize_func(f, b):
+                return lambda: self.show_customize_menu(f, b)
+
+            # Add both buttons to the button frame
+            edit_btn = ctk.CTkButton(
+                button_frame,
+                text="✎",
+                width=30,
+                height=30,
+                fg_color="transparent",
+                hover_color="#8A2BE2",
+                corner_radius=15,
+                command=create_customize_func(folder, btn)
+            )
+            edit_btn.pack(side="right", padx=5)
 
             del_btn = ctk.CTkButton(
-                frame,
+                button_frame,
                 text="✕",
                 width=30,
                 height=30,
-                fg_color="#2a2a2a",
+                fg_color="transparent",
                 hover_color="#8A2BE2",
                 corner_radius=15,
-                command=delete_mod
+                command=create_delete_func(folder)
             )
-            del_btn.pack(side="right", padx=10, pady=10)
+            del_btn.pack(side="right", padx=5)
+
+    def delete_mod(self, folder):
+        full = os.path.join(self.path, folder)
+        try:
+            shutil.rmtree(full)
+        except:
+            pass
+        self.refresh()
+
+    def show_customize_menu(self, folder, btn):
+        menu = ctk.CTkToplevel(self)
+        menu.title("Customize Mod")
+        menu.geometry("300x250")  # Made taller to accommodate new button
+        menu.resizable(False, False)
+        
+        # Make it modal
+        menu.transient(self)
+        menu.grab_set()
+        
+        # Center the window
+        menu.update_idletasks()
+        width = menu.winfo_width()
+        height = menu.winfo_height()
+        x = (menu.winfo_screenwidth() // 2) - (width // 2)
+        y = (menu.winfo_screenheight() // 2) - (height // 2)
+        menu.geometry(f'{width}x{height}+{x}+{y}')
+        
+        # Store the original icon
+        original_img = btn.cget("image")
+        selected_icon_path = None
+        
+        # Check if there's a custom icon
+        custom_icon_path = os.path.join(self.path, folder, "custom_icon.png")
+        has_custom_icon = os.path.exists(custom_icon_path)
+        
+        # Rename option
+        rename_frame = ctk.CTkFrame(menu)
+        rename_frame.pack(fill="x", padx=10, pady=10)
+        
+        rename_label = ctk.CTkLabel(rename_frame, text="Rename Mod:")
+        rename_label.pack(side="left", padx=5)
+        
+        rename_entry = ctk.CTkEntry(rename_frame, width=150)
+        rename_entry.insert(0, folder)
+        rename_entry.pack(side="left", padx=5)
+        
+        # Custom icon option
+        icon_frame = ctk.CTkFrame(menu)
+        icon_frame.pack(fill="x", padx=10, pady=10)
+        
+        icon_label = ctk.CTkLabel(icon_frame, text="Custom Icon:")
+        icon_label.pack(side="left", padx=5)
+        
+        def select_icon():
+            nonlocal selected_icon_path
+            icon_path = filedialog.askopenfilename(
+                title="Select Icon",
+                filetypes=[("Icon files", "*.ico;*.png;*.jpg;*.jpeg")]
+            )
+            if icon_path:
+                try:
+                    # Load and resize the image
+                    pil_img = Image.open(icon_path)
+                    pil_img = pil_img.resize((32, 32), Image.LANCZOS)
+                    new_img = ctk.CTkImage(pil_img, size=(32, 32))
+                    btn.configure(image=new_img)
+                    selected_icon_path = icon_path
+                    remove_btn.pack(side="left", padx=5)  # Show remove button when new icon is selected
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to load icon: {str(e)}")
+        
+        icon_btn = ctk.CTkButton(
+            icon_frame,
+            text="Select Icon",
+            width=100,
+            command=select_icon,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        icon_btn.pack(side="left", padx=5)
+
+        def remove_icon():
+            nonlocal selected_icon_path
+            if os.path.exists(custom_icon_path):
+                try:
+                    os.remove(custom_icon_path)
+                except:
+                    pass
+            selected_icon_path = None
+            btn.configure(image=original_img)
+            remove_btn.pack_forget()  # Hide remove button
+            self.refresh()
+        
+        remove_btn = ctk.CTkButton(
+            icon_frame,
+            text="Remove Icon",
+            width=100,
+            command=remove_icon,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        if has_custom_icon:
+            remove_btn.pack(side="left", padx=5)
+        
+        # Save button
+        def save_changes():
+            # Handle rename
+            new_name = rename_entry.get().strip()
+            if new_name and new_name != folder:
+                old_path = os.path.join(self.path, folder)
+                new_path = os.path.join(self.path, new_name)
+                try:
+                    os.rename(old_path, new_path)
+                    folder = new_name  # Update folder name for icon saving
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to rename: {str(e)}")
+                    return
+            
+            # Handle icon change
+            if selected_icon_path:
+                try:
+                    pil_img = Image.open(selected_icon_path)
+                    pil_img = pil_img.resize((32, 32), Image.LANCZOS)
+                    icon_dest = os.path.join(self.path, folder, "custom_icon.png")
+                    pil_img.save(icon_dest)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to save icon: {str(e)}")
+                    return
+            
+            self.refresh()
+            menu.destroy()
+        
+        def on_close():
+            # Restore original icon if changes weren't saved
+            if selected_icon_path:
+                btn.configure(image=original_img)
+            menu.destroy()
+        
+        save_btn = ctk.CTkButton(
+            menu,
+            text="Save Changes",
+            command=save_changes,
+            width=200,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        save_btn.pack(pady=20)
+        
+        # Handle window close
+        menu.protocol("WM_DELETE_WINDOW", on_close)
 
     def launch_exe(self, folder):
         full_path = os.path.join(self.path, folder)
@@ -1041,10 +1318,9 @@ def main():
     # Only check for updates if auto-update is enabled
     if settings["auto_update"]:
         update_window.start_update()
+        update_window.mainloop()
     else:
         update_window.destroy()
-    
-    update_window.mainloop()
     
     # Start the main application
     app = Launcher()
