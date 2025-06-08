@@ -13,6 +13,7 @@ import re
 import sys
 import hashlib
 import tempfile
+import time
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -60,82 +61,188 @@ def get_icon_from_exe(exe_path, size=(64, 64)):
                 img = Image.open(custom_icon_path)
                 img = img.resize(size, Image.LANCZOS)
                 return img
-            except:
-                pass  # If custom icon fails, fall back to exe icon
+            except Exception as e:
+                print(f"Failed to load custom icon: {e}")
 
-        # If no custom icon or it failed, try exe icon
-        large, small = ctypes.c_void_p(), ctypes.c_void_p()
-        ctypes.windll.shell32.ExtractIconExW(exe_path, 0, ctypes.byref(large), ctypes.byref(small), 1)
-        hicon = large.value if large.value else small.value
-        if not hicon:
-            return None
+        # Try to get icon from exe
+        try:
+            import win32gui
+            import win32ui
+            import win32con
+            import win32api
 
-        hdc = ctypes.windll.user32.GetDC(0)
-        bmp = ctypes.windll.gdi32.CreateCompatibleBitmap(hdc, size[0], size[1])
-        memdc = ctypes.windll.gdi32.CreateCompatibleDC(hdc)
-        oldbmp = ctypes.windll.gdi32.SelectObject(memdc, bmp)
+            # Get the icon
+            ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
+            ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
+            
+            large, small = win32gui.ExtractIconEx(exe_path, 0, 1)
+            win32gui.DestroyIcon(small[0])
+            
+            # Get the icon info
+            ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
+            ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
+            
+            # Create DC
+            hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+            hbmp = win32ui.CreateBitmap()
+            hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
+            hdc = hdc.CreateCompatibleDC()
+            
+            # Select the bitmap
+            hdc.SelectObject(hbmp)
+            
+            # Draw the icon
+            hdc.DrawIcon((0, 0), large[0])
+            
+            # Convert to PIL Image
+            bmpstr = hbmp.GetBitmapBits(True)
+            img = Image.frombuffer(
+                'RGBA',
+                (ico_x, ico_y),
+                bmpstr, 'raw', 'BGRA', 0, 1
+            )
+            
+            # Clean up
+            win32gui.DestroyIcon(large[0])
+            hdc.DeleteDC()
+            win32gui.ReleaseDC(0, hdc.GetHandleOutput())
+            hbmp.DeleteObject()
+            
+            # Resize to requested size
+            img = img.resize(size, Image.LANCZOS)
+            return img
+            
+        except Exception as e:
+            print(f"Failed to get icon from exe: {e}")
+            # Fall back to shell32 method
+            try:
+                large, small = ctypes.c_void_p(), ctypes.c_void_p()
+                ctypes.windll.shell32.ExtractIconExW(exe_path, 0, ctypes.byref(large), ctypes.byref(small), 1)
+                hicon = large.value if large.value else small.value
+                if not hicon:
+                    return None
 
-        ctypes.windll.user32.DrawIconEx(memdc, 0, 0, hicon, size[0], size[1], 0, 0, 0x0003)
+                hdc = ctypes.windll.user32.GetDC(0)
+                bmp = ctypes.windll.gdi32.CreateCompatibleBitmap(hdc, size[0], size[1])
+                memdc = ctypes.windll.gdi32.CreateCompatibleDC(hdc)
+                oldbmp = ctypes.windll.gdi32.SelectObject(memdc, bmp)
 
-        class BITMAPINFOHEADER(ctypes.Structure):
-            _fields_ = [
-                ('biSize', ctypes.c_uint32),
-                ('biWidth', ctypes.c_int32),
-                ('biHeight', ctypes.c_int32),
-                ('biPlanes', ctypes.c_uint16),
-                ('biBitCount', ctypes.c_uint16),
-                ('biCompression', ctypes.c_uint32),
-                ('biSizeImage', ctypes.c_uint32),
-                ('biXPelsPerMeter', ctypes.c_int32),
-                ('biYPelsPerMeter', ctypes.c_int32),
-                ('biClrUsed', ctypes.c_uint32),
-                ('biClrImportant', ctypes.c_uint32)
-            ]
+                ctypes.windll.user32.DrawIconEx(memdc, 0, 0, hicon, size[0], size[1], 0, 0, 0x0003)
 
-        import ctypes.wintypes
+                class BITMAPINFOHEADER(ctypes.Structure):
+                    _fields_ = [
+                        ('biSize', ctypes.c_uint32),
+                        ('biWidth', ctypes.c_int32),
+                        ('biHeight', ctypes.c_int32),
+                        ('biPlanes', ctypes.c_uint16),
+                        ('biBitCount', ctypes.c_uint16),
+                        ('biCompression', ctypes.c_uint32),
+                        ('biSizeImage', ctypes.c_uint32),
+                        ('biXPelsPerMeter', ctypes.c_int32),
+                        ('biYPelsPerMeter', ctypes.c_int32),
+                        ('biClrUsed', ctypes.c_uint32),
+                        ('biClrImportant', ctypes.c_uint32)
+                    ]
 
-        bmpinfo = ctypes.create_string_buffer(40)
-        ctypes.windll.gdi32.GetDIBits(memdc, bmp, 0, size[1], None, bmpinfo, 0)
+                bmpinfo = ctypes.create_string_buffer(40)
+                ctypes.windll.gdi32.GetDIBits(memdc, bmp, 0, size[1], None, bmpinfo, 0)
 
-        bih = BITMAPINFOHEADER.from_buffer_copy(bmpinfo)
-        buf_size = bih.biSizeImage if bih.biSizeImage != 0 else size[0]*size[1]*4
-        buf = ctypes.create_string_buffer(buf_size)
+                bih = BITMAPINFOHEADER.from_buffer_copy(bmpinfo)
+                buf_size = bih.biSizeImage if bih.biSizeImage != 0 else size[0]*size[1]*4
+                buf = ctypes.create_string_buffer(buf_size)
 
-        ctypes.windll.gdi32.GetDIBits(memdc, bmp, 0, size[1], buf, bmpinfo, 0)
+                ctypes.windll.gdi32.GetDIBits(memdc, bmp, 0, size[1], buf, bmpinfo, 0)
 
-        img = Image.frombuffer('BGRA', size, buf, 'raw', 'BGRA', 0, 1).convert('RGBA')
+                img = Image.frombuffer('BGRA', size, buf, 'raw', 'BGRA', 0, 1).convert('RGBA')
 
-        ctypes.windll.gdi32.SelectObject(memdc, oldbmp)
-        ctypes.windll.gdi32.DeleteObject(bmp)
-        ctypes.windll.gdi32.DeleteDC(memdc)
-        ctypes.windll.user32.ReleaseDC(0, hdc)
-        ctypes.windll.user32.DestroyIcon(hicon)
+                ctypes.windll.gdi32.SelectObject(memdc, oldbmp)
+                ctypes.windll.gdi32.DeleteObject(bmp)
+                ctypes.windll.gdi32.DeleteDC(memdc)
+                ctypes.windll.user32.ReleaseDC(0, hdc)
+                ctypes.windll.user32.DestroyIcon(hicon)
 
-        return img
-    except Exception:
+                return img
+            except Exception as e:
+                print(f"Failed to get icon using shell32: {e}")
+                return None
+    except Exception as e:
+        print(f"Error in get_icon_from_exe: {e}")
         return None
 
 def get_icon_from_ico_folder(path, size=(64,64)):
-    # First check for custom icon
-    custom_icon_path = os.path.join(path, "custom_icon.png")
-    if os.path.exists(custom_icon_path):
-        try:
-            img = Image.open(custom_icon_path)
-            img = img.resize(size, Image.LANCZOS)
-            return img
-        except:
-            pass  # If custom icon fails, fall back to ico files
-
-    # If no custom icon or it failed, try ico files
-    for file in os.listdir(path):
-        if file.lower().endswith(".ico"):
+    try:
+        # First check for custom icon
+        custom_icon_path = os.path.join(path, "custom_icon.png")
+        if os.path.exists(custom_icon_path):
             try:
-                img = Image.open(os.path.join(path, file)).convert("RGBA")
+                img = Image.open(custom_icon_path)
                 img = img.resize(size, Image.LANCZOS)
                 return img
-            except:
-                continue
-    return None
+            except Exception as e:
+                print(f"Failed to load custom icon: {e}")
+
+        # Try to find and load .ico files
+        for file in os.listdir(path):
+            if file.lower().endswith(".ico"):
+                try:
+                    # Try using win32gui for better .ico support
+                    import win32gui
+                    import win32ui
+                    import win32con
+                    import win32api
+                    
+                    ico_path = os.path.join(path, file)
+                    large, small = win32gui.ExtractIconEx(ico_path, 0, 1)
+                    win32gui.DestroyIcon(small[0])
+                    
+                    # Get the icon info
+                    ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
+                    ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
+                    
+                    # Create DC
+                    hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+                    hbmp = win32ui.CreateBitmap()
+                    hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
+                    hdc = hdc.CreateCompatibleDC()
+                    
+                    # Select the bitmap
+                    hdc.SelectObject(hbmp)
+                    
+                    # Draw the icon
+                    hdc.DrawIcon((0, 0), large[0])
+                    
+                    # Convert to PIL Image
+                    bmpstr = hbmp.GetBitmapBits(True)
+                    img = Image.frombuffer(
+                        'RGBA',
+                        (ico_x, ico_y),
+                        bmpstr, 'raw', 'BGRA', 0, 1
+                    )
+                    
+                    # Clean up
+                    win32gui.DestroyIcon(large[0])
+                    hdc.DeleteDC()
+                    win32gui.ReleaseDC(0, hdc.GetHandleOutput())
+                    hbmp.DeleteObject()
+                    
+                    # Resize to requested size
+                    img = img.resize(size, Image.LANCZOS)
+                    return img
+                    
+                except Exception as e:
+                    print(f"Failed to load .ico using win32gui: {e}")
+                    # Fall back to PIL
+                    try:
+                        img = Image.open(os.path.join(path, file)).convert("RGBA")
+                        img = img.resize(size, Image.LANCZOS)
+                        return img
+                    except Exception as e:
+                        print(f"Failed to load .ico using PIL: {e}")
+                        continue
+        return None
+    except Exception as e:
+        print(f"Error in get_icon_from_ico_folder: {e}")
+        return None
 
 def get_file_hash(file_path):
     """Calculate SHA-256 hash of a file"""
@@ -936,13 +1043,7 @@ class Launcher(ctk.CTk):
         self.import_name_entry.bind("<Return>", self.import_name_entered)
         self.import_name_entry.focus()
 
-    def import_name_entered(self, event=None):
-        mod_name = self.import_name_entry.get().strip()
-        self.mod_name = mod_name if mod_name else None
-
-        self.import_label.pack_forget()
-        self.import_name_entry.pack_forget()
-
+        # Create buttons but don't show them yet
         self.import_zip_btn = ctk.CTkButton(
             self, 
             text="Import from ZIP", 
@@ -970,10 +1071,307 @@ class Launcher(ctk.CTk):
             hover_color="#8A2BE2",
             corner_radius=15
         )
+        self.import_link_btn = ctk.CTkButton(
+            self, 
+            text="Import from Link", 
+            width=400, 
+            command=self.import_from_link,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2",
+            corner_radius=15
+        )
 
+    def import_name_entered(self, event=None):
+        mod_name = self.import_name_entry.get().strip()
+        self.mod_name = mod_name if mod_name else None
+
+        self.import_label.pack_forget()
+        self.import_name_entry.pack_forget()
+
+        # Show the buttons
         self.import_zip_btn.pack(pady=20)
         self.import_folder_btn.pack(pady=20)
         self.import_gb_btn.pack(pady=20)
+        self.import_link_btn.pack(pady=20)
+
+    def show_progress(self, message, progress=0):
+        self.progress_label.configure(text=message)
+        self.progress.set(progress)
+
+    def import_zip(self):
+        zip_paths = filedialog.askopenfilenames(
+            title="Select Mod Archives",
+            filetypes=[("Archive files", "*.zip;*.rar;*.7z")]
+        )
+        if not zip_paths:
+            self.show_normal_ui()
+            return
+
+        self.progress.set(0)
+        self.progress.pack()
+        self.progress_label = ctk.CTkLabel(self, text="")
+        self.progress_label.pack(pady=(0, 5))
+        self.import_button.configure(state="disabled")
+
+        threading.Thread(target=self.process_multiple_archives, args=(zip_paths,), daemon=True).start()
+
+    def import_folder(self):
+        folder_paths = filedialog.askdirectory(
+            title="Select Mod Folders",
+            mustexist=True
+        )
+        if not folder_paths:
+            self.show_normal_ui()
+            return
+
+        self.progress.set(0)
+        self.progress.pack()
+        self.progress_label = ctk.CTkLabel(self, text="")
+        self.progress_label.pack(pady=(0, 5))
+        self.import_button.configure(state="disabled")
+
+        threading.Thread(target=self.process_multiple_folders, args=([folder_paths],), daemon=True).start()
+
+    def process_multiple_archives(self, archive_paths):
+        temp_dir = os.path.join(script_dir, "_temp_import")
+        try:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            os.makedirs(temp_dir)
+
+            total_archives = len(archive_paths)
+            for i, archive_path in enumerate(archive_paths):
+                try:
+                    self.after(0, lambda p=i/total_archives: self.show_progress(f"Processing archive {i+1}/{total_archives}: {os.path.basename(archive_path)}", p))
+                    
+                    # Extract archive
+                    try:
+                        self.extract_archive(archive_path, temp_dir)
+                    except Exception as e:
+                        self.after(0, lambda: self.show_error(f"Failed to extract {os.path.basename(archive_path)}: {str(e)}"))
+                        continue
+
+                    # Find game folder
+                    if any(file.endswith('.exe') for file in os.listdir(temp_dir)):
+                        game_folder = temp_dir
+                    else:
+                        game_folder = self.find_game_folder(temp_dir)
+
+                    if not game_folder:
+                        self.after(0, lambda: self.show_error(f"No executable found in {os.path.basename(archive_path)}!"))
+                        continue
+
+                    # Generate destination name
+                    base_name = os.path.splitext(os.path.basename(archive_path))[0]
+                    dest_name = self.mod_name if self.mod_name else base_name
+                    if i > 0:  # Add number suffix for multiple archives
+                        dest_name = f"{dest_name}_{i+1}"
+                    dest_path = os.path.join(self.path, dest_name)
+
+                    if os.path.exists(dest_path):
+                        shutil.rmtree(dest_path)
+
+                    # Create destination directory
+                    os.makedirs(dest_path, exist_ok=True)
+
+                    # Copy files
+                    total_files = len(os.listdir(game_folder))
+                    for j, item in enumerate(os.listdir(game_folder)):
+                        s = os.path.join(game_folder, item)
+                        d = os.path.join(dest_path, item)
+                        self.after(0, lambda p=(i + j/total_files)/total_archives: 
+                            self.show_progress(f"Copying files from {os.path.basename(archive_path)}: {item}", p))
+                        if os.path.isdir(s):
+                            shutil.copytree(s, d)
+                        else:
+                            os.makedirs(os.path.dirname(d), exist_ok=True)
+                            shutil.copy2(s, d)
+
+                except Exception as e:
+                    self.after(0, lambda: self.show_error(f"Error processing {os.path.basename(archive_path)}: {str(e)}"))
+                    continue
+
+            self.after(0, self.refresh)
+        except Exception as e:
+            self.after(0, lambda: self.show_error(f"Error importing mods: {str(e)}"))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            self.after(0, self.finish_import_ui)
+
+    def process_multiple_folders(self, folder_paths):
+        try:
+            total_folders = len(folder_paths)
+            for i, folder_path in enumerate(folder_paths):
+                try:
+                    self.after(0, lambda p=i/total_folders: self.show_progress(f"Processing folder {i+1}/{total_folders}: {os.path.basename(folder_path)}", p))
+
+                    # Find game folder
+                    if any(file.endswith('.exe') for file in os.listdir(folder_path)):
+                        game_folder = folder_path
+                    else:
+                        game_folder = self.find_game_folder(folder_path)
+
+                    if not game_folder:
+                        self.after(0, lambda: self.show_error(f"No executable found in {os.path.basename(folder_path)}!"))
+                        continue
+
+                    # Generate destination name
+                    base_name = os.path.basename(folder_path)
+                    dest_name = self.mod_name if self.mod_name else base_name
+                    if i > 0:  # Add number suffix for multiple folders
+                        dest_name = f"{dest_name}_{i+1}"
+                    dest_path = os.path.join(self.path, dest_name)
+
+                    if os.path.exists(dest_path):
+                        shutil.rmtree(dest_path)
+
+                    # Create destination directory
+                    os.makedirs(dest_path, exist_ok=True)
+
+                    # Copy files
+                    total_files = len(os.listdir(game_folder))
+                    for j, item in enumerate(os.listdir(game_folder)):
+                        s = os.path.join(game_folder, item)
+                        d = os.path.join(dest_path, item)
+                        self.after(0, lambda p=(i + j/total_files)/total_folders: 
+                            self.show_progress(f"Copying files from {os.path.basename(folder_path)}: {item}", p))
+                        if os.path.isdir(s):
+                            shutil.copytree(s, d)
+                        else:
+                            os.makedirs(os.path.dirname(d), exist_ok=True)
+                            shutil.copy2(s, d)
+
+                except Exception as e:
+                    self.after(0, lambda: self.show_error(f"Error processing {os.path.basename(folder_path)}: {str(e)}"))
+                    continue
+
+            self.after(0, self.refresh)
+        except Exception as e:
+            self.after(0, lambda: self.show_error(f"Error importing mods: {str(e)}"))
+        finally:
+            self.after(0, self.finish_import_ui)
+
+    def finish_import_ui(self):
+        self.progress.pack_forget()
+        self.progress.set(0)
+        if hasattr(self, 'progress_label'):
+            self.progress_label.pack_forget()
+        self.import_button.configure(state="normal")
+        self.show_normal_ui()
+
+    def show_normal_ui(self):
+        for widget in self.winfo_children():
+            widget.pack_forget()
+        self.search.pack(pady=(20, 10))
+        self.scroll_frame.pack()
+        self.import_button = ctk.CTkButton(
+            self, 
+            text="Import Mod", 
+            corner_radius=20, 
+            command=self.show_import_ui, 
+            width=700,
+            fg_color="#2a2a2a",
+            hover_color="#8A2BE2"
+        )
+        self.import_button.pack(pady=10)
+
+    def import_from_link(self):
+        url = ctk.CTkInputDialog(text="Paste the direct download link here:", title="Import from Link").get_input()
+        if not url:
+            self.show_normal_ui()
+            return
+
+        self.progress.set(0)
+        self.progress.pack()
+        self.import_button.configure(state="disabled")
+
+        threading.Thread(target=self.download_and_extract_link, args=(url,), daemon=True).start()
+
+    def download_and_extract_link(self, url):
+        temp_dir = os.path.join(script_dir, "_temp_link")
+        try:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            os.makedirs(temp_dir)
+
+            # Get the file extension from the URL
+            ext = os.path.splitext(url.split('?')[0])[1].lower()
+            if ext not in ['.zip', '.rar', '.7z']:
+                ext = '.zip'  # Default to zip if no extension found
+
+            archive_path = os.path.join(temp_dir, f"mod{ext}")
+
+            # Download the file
+            r = requests.get(url, stream=True)
+            if r.status_code != 200:
+                self.show_error(f"Failed to download file (status {r.status_code})")
+                self.after(0, self.finish_import_ui)
+                return
+
+            total_length = r.headers.get('content-length')
+            if total_length is None:
+                total_length = 0
+            else:
+                total_length = int(total_length)
+
+            downloaded = 0
+            with open(archive_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_length > 0:
+                            progress_val = downloaded / total_length
+                            self.after(0, self.progress.set, progress_val)
+
+            try:
+                self.extract_archive(archive_path, temp_dir)
+            except FileNotFoundError as e:
+                if "7z.exe not found" in str(e):
+                    self.show_error("7-Zip is required to extract .rar files. Please install 7-Zip from https://www.7-zip.org/")
+                else:
+                    self.show_error(f"Failed to extract archive: {str(e)}")
+                return
+            except Exception as e:
+                self.show_error(f"Failed to extract archive: {str(e)}")
+                return
+
+            # First check if the temp directory itself has an exe
+            if any(file.endswith('.exe') for file in os.listdir(temp_dir)):
+                game_folder = temp_dir
+            else:
+                # If not, search in subfolders
+                game_folder = self.find_game_folder(temp_dir)
+
+            if not game_folder:
+                self.show_error("No executable found in the downloaded mod!")
+                return
+
+            dest_name = self.mod_name if hasattr(self, "mod_name") and self.mod_name else f"mod_{int(time.time())}"
+            dest_path = os.path.join(self.path, dest_name)
+            if os.path.exists(dest_path):
+                shutil.rmtree(dest_path)
+
+            # Create the destination directory
+            os.makedirs(dest_path, exist_ok=True)
+
+            # Copy only the contents of the game folder
+            for item in os.listdir(game_folder):
+                s = os.path.join(game_folder, item)
+                d = os.path.join(dest_path, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d)
+                else:
+                    # Ensure the parent directory exists
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    shutil.copy2(s, d)
+
+            self.refresh()
+        except Exception as e:
+            self.show_error(f"Error downloading or extracting mod:\n{e}")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            self.after(0, self.finish_import_ui)
 
     def find_game_folder(self, path):
         print(f"Searching in: {path}")  # Debug print
@@ -990,131 +1388,6 @@ class Launcher(ctk.CTk):
                 if result:
                     return result
         return None
-
-    def import_folder(self):
-        folder_path = filedialog.askdirectory()
-        if not folder_path:
-            self.show_normal_ui()
-            return
-
-        self.progress.set(0)
-        self.progress.pack()
-        self.import_button.configure(state="disabled")
-
-        def do_import():
-            try:
-                print(f"Selected folder: {folder_path}")
-                print(f"Files in folder: {os.listdir(folder_path)}")
-
-                # First check if the selected folder itself has an exe
-                if any(file.endswith('.exe') for file in os.listdir(folder_path)):
-                    print("Found exe in root folder")
-                    game_folder = folder_path
-                else:
-                    print("No exe in root, searching subfolders")
-                    game_folder = self.find_game_folder(folder_path)
-
-                print(f"Game folder found: {game_folder}")
-
-                if not game_folder:
-                    self.after(0, lambda: self.show_error("No executable found in the selected folder or its subfolders!"))
-                    self.after(0, self.finish_import_ui)
-                    return
-
-                dest_name = self.mod_name if self.mod_name else os.path.basename(game_folder)
-                dest_path = os.path.join(self.path, dest_name)
-
-                print(f"Destination path: {dest_path}")
-
-                if os.path.exists(dest_path):
-                    shutil.rmtree(dest_path)
-
-                # Create the destination directory
-                os.makedirs(dest_path, exist_ok=True)
-
-                # Copy only the contents of the game folder
-                total_files = len(os.listdir(game_folder))
-                for i, item in enumerate(os.listdir(game_folder)):
-                    s = os.path.join(game_folder, item)
-                    d = os.path.join(dest_path, item)
-                    print(f"Copying: {s} -> {d}")
-                    if os.path.isdir(s):
-                        shutil.copytree(s, d)
-                    else:
-                        # Ensure the parent directory exists
-                        os.makedirs(os.path.dirname(d), exist_ok=True)
-                        shutil.copy2(s, d)
-                    # Update progress
-                    self.after(0, lambda p=i/total_files: self.progress.set(p))
-
-                self.after(0, self.refresh)
-            except Exception as e:
-                self.after(0, lambda: self.show_error(f"Error importing mod:\n{e}"))
-            finally:
-                self.after(0, self.finish_import_ui)
-
-        threading.Thread(target=do_import, daemon=True).start()
-
-    def import_zip(self):
-        zip_path = filedialog.askopenfilename(filetypes=[("Archive files", "*.zip;*.rar;*.7z")])
-        if not zip_path:
-            self.show_normal_ui()
-            return
-
-        self.progress.set(0)
-        self.progress.pack()
-        self.import_button.configure(state="disabled")
-
-        def do_import():
-            temp_dir = os.path.join(script_dir, "_temp_import")
-            try:
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-                os.makedirs(temp_dir)
-
-                self.extract_archive(zip_path, temp_dir)
-
-                # First check if the temp directory itself has an exe
-                if any(file.endswith('.exe') for file in os.listdir(temp_dir)):
-                    game_folder = temp_dir
-                else:
-                    # If not, search in subfolders
-                    game_folder = self.find_game_folder(temp_dir)
-
-                if not game_folder:
-                    self.after(0, lambda: self.show_error("No executable found in the archive!"))
-                    return
-
-                dest_name = self.mod_name if self.mod_name else os.path.basename(game_folder)
-                dest_path = os.path.join(self.path, dest_name)
-                if os.path.exists(dest_path):
-                    shutil.rmtree(dest_path)
-
-                # Create the destination directory
-                os.makedirs(dest_path, exist_ok=True)
-
-                # Copy only the contents of the game folder
-                total_files = len(os.listdir(game_folder))
-                for i, item in enumerate(os.listdir(game_folder)):
-                    s = os.path.join(game_folder, item)
-                    d = os.path.join(dest_path, item)
-                    if os.path.isdir(s):
-                        shutil.copytree(s, d)
-                    else:
-                        # Ensure the parent directory exists
-                        os.makedirs(os.path.dirname(d), exist_ok=True)
-                        shutil.copy2(s, d)
-                    # Update progress
-                    self.after(0, lambda p=i/total_files: self.progress.set(p))
-
-                self.after(0, self.refresh)
-            except Exception as e:
-                self.after(0, lambda: self.show_error(f"Error importing mod:\n{e}"))
-            finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                self.after(0, self.finish_import_ui)
-
-        threading.Thread(target=do_import, daemon=True).start()
 
     def import_gamebanana(self):
         url = ctk.CTkInputDialog(text="Paste your Gamebanana mod link here:", title="Gamebanana Import").get_input()
@@ -1237,70 +1510,90 @@ class Launcher(ctk.CTk):
     def show_error(self, msg):
         messagebox.showerror("Error", msg)
 
-    def finish_import_ui(self):
-        self.progress.pack_forget()
-        self.progress.set(0)
-        self.import_button.configure(state="normal")
-        self.show_normal_ui()
-
-    def show_normal_ui(self):
-        for widget in self.winfo_children():
-            widget.pack_forget()
-        self.search.pack(pady=(20, 10))
-        self.scroll_frame.pack()
-        self.import_button = ctk.CTkButton(
-            self, 
-            text="Import Mod", 
-            corner_radius=20, 
-            command=self.show_import_ui, 
-            width=700,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
-        )
-        self.import_button.pack(pady=10)
-
-    def import_mod(self):
-        file_path = filedialog.askopenfilename(title="Select Mod Archive", filetypes=[("Archive files", "*.zip;*.rar;*.7z")])
-        if not file_path:
-            return
-        mod_name = os.path.splitext(os.path.basename(file_path))[0]
-        mod_path = os.path.join(self.path, mod_name)
-        if os.path.exists(mod_path):
-            if not messagebox.askyesno("Mod already exists", f"Mod {mod_name} already exists. Overwrite?"):
-                return
-            shutil.rmtree(mod_path)
-        os.makedirs(mod_path)
-        try:
-            self.extract_archive(file_path, mod_path)
-            self.refresh()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to import mod: {str(e)}")
-            if os.path.exists(mod_path):
-                shutil.rmtree(mod_path)
-
     def extract_archive(self, archive_path, extract_to):
-        if archive_path.lower().endswith('.zip'):
-            with zipfile.ZipFile(archive_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_to)
-        elif archive_path.lower().endswith('.rar'):
-            # Path to 7z.exe (update if needed)
-            sevenzip_path = r"C:\Program Files\7-Zip\7z.exe"
-            if not os.path.exists(sevenzip_path):
-                raise FileNotFoundError("7z.exe not found! Please install 7-Zip and update the path.")
-            # Use CREATE_NO_WINDOW to hide the console window
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-            subprocess.run([sevenzip_path, 'x', '-y', f'-o{extract_to}', archive_path], 
-                         check=True, 
-                         startupinfo=startupinfo,
-                         creationflags=subprocess.CREATE_NO_WINDOW)
-        elif archive_path.lower().endswith('.7z'):
-            import py7zr
-            with py7zr.SevenZipFile(archive_path, mode='r') as sz:
-                sz.extractall(extract_to)
-        else:
-            raise ValueError("Unsupported archive format")
+        try:
+            if archive_path.lower().endswith('.zip'):
+                with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                    # Check if the zip is valid
+                    if zip_ref.testzip() is not None:
+                        raise zipfile.BadZipFile("Invalid or corrupted ZIP file")
+                    
+                    # Get the list of files
+                    file_list = zip_ref.namelist()
+                    
+                    # Check if the zip is empty
+                    if not file_list:
+                        raise ValueError("ZIP file is empty")
+                    
+                    # Extract all files
+                    zip_ref.extractall(extract_to)
+                    
+            elif archive_path.lower().endswith('.rar'):
+                # Path to 7z.exe (update if needed)
+                sevenzip_path = r"C:\Program Files\7-Zip\7z.exe"
+                if not os.path.exists(sevenzip_path):
+                    raise FileNotFoundError("7z.exe not found! Please install 7-Zip and update the path.")
+                
+                # Use CREATE_NO_WINDOW to hide the console window
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                
+                # Run 7z with error checking
+                result = subprocess.run(
+                    [sevenzip_path, 'x', '-y', f'-o{extract_to}', archive_path],
+                    check=True,
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if "Error" in result.stdout or "Error" in result.stderr:
+                    raise Exception(f"7-Zip extraction failed: {result.stdout}\n{result.stderr}")
+                
+            elif archive_path.lower().endswith('.7z'):
+                try:
+                    import py7zr
+                    with py7zr.SevenZipFile(archive_path, mode='r') as sz:
+                        # Check if the archive is valid
+                        if not sz.test():
+                            raise py7zr.Bad7zFile("Invalid or corrupted 7z file")
+                        sz.extractall(extract_to)
+                except ImportError:
+                    # Fallback to 7z.exe if py7zr is not available
+                    sevenzip_path = r"C:\Program Files\7-Zip\7z.exe"
+                    if not os.path.exists(sevenzip_path):
+                        raise FileNotFoundError("7z.exe not found! Please install 7-Zip and update the path.")
+                    
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+                    
+                    result = subprocess.run(
+                        [sevenzip_path, 'x', '-y', f'-o{extract_to}', archive_path],
+                        check=True,
+                        startupinfo=startupinfo,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if "Error" in result.stdout or "Error" in result.stderr:
+                        raise Exception(f"7-Zip extraction failed: {result.stdout}\n{result.stderr}")
+            else:
+                raise ValueError("Unsupported archive format")
+            
+            # Verify extraction
+            if not os.listdir(extract_to):
+                raise ValueError("Archive extraction resulted in empty directory")
+                
+        except zipfile.BadZipFile as e:
+            raise ValueError(f"Invalid or corrupted ZIP file: {str(e)}")
+        except zipfile.LargeZipFile as e:
+            raise ValueError(f"ZIP file is too large: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Failed to extract archive: {str(e)}")
 
 def main():
     # Check for updates before starting the main application
