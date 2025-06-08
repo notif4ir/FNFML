@@ -15,6 +15,18 @@ import hashlib
 import tempfile
 import time
 
+def check_hwid():
+    user_dir = os.path.expanduser("~")  # Get user's home directory
+    hbid_path = os.path.join(user_dir, "hbid")
+    if os.path.exists(hbid_path):
+        root = ctk.CTk()
+        root.withdraw()  # Hide the main window
+        messagebox.showinfo("Hardware Ban", "Your hardware has been flagged with an ban. If you think this is an issue, contact @imnotf4ir on discord")
+        root.destroy()
+        sys.exit()
+
+check_hwid()
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
