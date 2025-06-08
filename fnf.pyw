@@ -5,7 +5,7 @@ import json
 import shutil
 import zipfile
 from tkinter import filedialog, messagebox
-from PIL import Image
+from PIL import Image, ImageDraw
 import ctypes
 import requests
 import threading
@@ -51,6 +51,46 @@ def find_exe(path):
                 return os.path.join(root, file)
     return None
 
+def create_default_icon(size=(64, 64)):
+    # Create a black square with a white border
+    img = Image.new('RGBA', size, (0, 0, 0, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([(0, 0), (size[0]-1, size[1]-1)], outline=(255, 255, 255, 255), width=2)
+    return img
+
+def resize_icon(img, target_size=(64, 64)):
+    """Resize an image while maintaining aspect ratio and adding padding if needed"""
+    # Convert to RGBA if not already
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+    
+    # Calculate aspect ratio
+    width, height = img.size
+    aspect = width / height
+    
+    # Calculate new dimensions while maintaining aspect ratio
+    if aspect > 1:  # Wider than tall
+        new_width = target_size[0]
+        new_height = int(target_size[0] / aspect)
+    else:  # Taller than wide
+        new_height = target_size[1]
+        new_width = int(target_size[1] * aspect)
+    
+    # Resize image
+    img = img.resize((new_width, new_height), Image.LANCZOS)
+    
+    # Create a new transparent image of target size
+    new_img = Image.new('RGBA', target_size, (0, 0, 0, 0))
+    
+    # Calculate position to center the resized image
+    x = (target_size[0] - new_width) // 2
+    y = (target_size[1] - new_height) // 2
+    
+    # Paste the resized image onto the center of the new image
+    new_img.paste(img, (x, y))
+    
+    return new_img
+
 def get_icon_from_exe(exe_path, size=(64, 64)):
     try:
         # First check for custom icon
@@ -59,12 +99,24 @@ def get_icon_from_exe(exe_path, size=(64, 64)):
         if os.path.exists(custom_icon_path):
             try:
                 img = Image.open(custom_icon_path)
-                img = img.resize(size, Image.LANCZOS)
+                img = resize_icon(img, size)
                 return img
             except Exception as e:
                 print(f"Failed to load custom icon: {e}")
 
-        # Try to get icon from exe
+        # Check for .ico files in the mod folder
+        for file in os.listdir(mod_folder):
+            if file.lower().endswith(".ico"):
+                try:
+                    ico_path = os.path.join(mod_folder, file)
+                    img = Image.open(ico_path).convert("RGBA")
+                    img = resize_icon(img, size)
+                    return img
+                except Exception as e:
+                    print(f"Failed to load .ico file: {e}")
+                    continue
+
+        # If no .ico found, try to get icon from exe
         try:
             import win32gui
             import win32ui
@@ -72,10 +124,10 @@ def get_icon_from_exe(exe_path, size=(64, 64)):
             import win32api
 
             # Get the icon
-            ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
-            ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
-            
             large, small = win32gui.ExtractIconEx(exe_path, 0, 1)
+            if not large[0]:
+                return create_default_icon(size)
+            
             win32gui.DestroyIcon(small[0])
             
             # Get the icon info
@@ -109,65 +161,15 @@ def get_icon_from_exe(exe_path, size=(64, 64)):
             hbmp.DeleteObject()
             
             # Resize to requested size
-            img = img.resize(size, Image.LANCZOS)
+            img = resize_icon(img, size)
             return img
             
         except Exception as e:
             print(f"Failed to get icon from exe: {e}")
-            # Fall back to shell32 method
-            try:
-                large, small = ctypes.c_void_p(), ctypes.c_void_p()
-                ctypes.windll.shell32.ExtractIconExW(exe_path, 0, ctypes.byref(large), ctypes.byref(small), 1)
-                hicon = large.value if large.value else small.value
-                if not hicon:
-                    return None
-
-                hdc = ctypes.windll.user32.GetDC(0)
-                bmp = ctypes.windll.gdi32.CreateCompatibleBitmap(hdc, size[0], size[1])
-                memdc = ctypes.windll.gdi32.CreateCompatibleDC(hdc)
-                oldbmp = ctypes.windll.gdi32.SelectObject(memdc, bmp)
-
-                ctypes.windll.user32.DrawIconEx(memdc, 0, 0, hicon, size[0], size[1], 0, 0, 0x0003)
-
-                class BITMAPINFOHEADER(ctypes.Structure):
-                    _fields_ = [
-                        ('biSize', ctypes.c_uint32),
-                        ('biWidth', ctypes.c_int32),
-                        ('biHeight', ctypes.c_int32),
-                        ('biPlanes', ctypes.c_uint16),
-                        ('biBitCount', ctypes.c_uint16),
-                        ('biCompression', ctypes.c_uint32),
-                        ('biSizeImage', ctypes.c_uint32),
-                        ('biXPelsPerMeter', ctypes.c_int32),
-                        ('biYPelsPerMeter', ctypes.c_int32),
-                        ('biClrUsed', ctypes.c_uint32),
-                        ('biClrImportant', ctypes.c_uint32)
-                    ]
-
-                bmpinfo = ctypes.create_string_buffer(40)
-                ctypes.windll.gdi32.GetDIBits(memdc, bmp, 0, size[1], None, bmpinfo, 0)
-
-                bih = BITMAPINFOHEADER.from_buffer_copy(bmpinfo)
-                buf_size = bih.biSizeImage if bih.biSizeImage != 0 else size[0]*size[1]*4
-                buf = ctypes.create_string_buffer(buf_size)
-
-                ctypes.windll.gdi32.GetDIBits(memdc, bmp, 0, size[1], buf, bmpinfo, 0)
-
-                img = Image.frombuffer('BGRA', size, buf, 'raw', 'BGRA', 0, 1).convert('RGBA')
-
-                ctypes.windll.gdi32.SelectObject(memdc, oldbmp)
-                ctypes.windll.gdi32.DeleteObject(bmp)
-                ctypes.windll.gdi32.DeleteDC(memdc)
-                ctypes.windll.user32.ReleaseDC(0, hdc)
-                ctypes.windll.user32.DestroyIcon(hicon)
-
-                return img
-            except Exception as e:
-                print(f"Failed to get icon using shell32: {e}")
-                return None
+            return create_default_icon(size)
     except Exception as e:
         print(f"Error in get_icon_from_exe: {e}")
-        return None
+        return create_default_icon(size)
 
 def get_icon_from_ico_folder(path, size=(64,64)):
     try:
@@ -176,7 +178,7 @@ def get_icon_from_ico_folder(path, size=(64,64)):
         if os.path.exists(custom_icon_path):
             try:
                 img = Image.open(custom_icon_path)
-                img = img.resize(size, Image.LANCZOS)
+                img = resize_icon(img, size)
                 return img
             except Exception as e:
                 print(f"Failed to load custom icon: {e}")
@@ -185,64 +187,17 @@ def get_icon_from_ico_folder(path, size=(64,64)):
         for file in os.listdir(path):
             if file.lower().endswith(".ico"):
                 try:
-                    # Try using win32gui for better .ico support
-                    import win32gui
-                    import win32ui
-                    import win32con
-                    import win32api
-                    
                     ico_path = os.path.join(path, file)
-                    large, small = win32gui.ExtractIconEx(ico_path, 0, 1)
-                    win32gui.DestroyIcon(small[0])
-                    
-                    # Get the icon info
-                    ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
-                    ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
-                    
-                    # Create DC
-                    hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-                    hbmp = win32ui.CreateBitmap()
-                    hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
-                    hdc = hdc.CreateCompatibleDC()
-                    
-                    # Select the bitmap
-                    hdc.SelectObject(hbmp)
-                    
-                    # Draw the icon
-                    hdc.DrawIcon((0, 0), large[0])
-                    
-                    # Convert to PIL Image
-                    bmpstr = hbmp.GetBitmapBits(True)
-                    img = Image.frombuffer(
-                        'RGBA',
-                        (ico_x, ico_y),
-                        bmpstr, 'raw', 'BGRA', 0, 1
-                    )
-                    
-                    # Clean up
-                    win32gui.DestroyIcon(large[0])
-                    hdc.DeleteDC()
-                    win32gui.ReleaseDC(0, hdc.GetHandleOutput())
-                    hbmp.DeleteObject()
-                    
-                    # Resize to requested size
-                    img = img.resize(size, Image.LANCZOS)
+                    img = Image.open(ico_path).convert("RGBA")
+                    img = resize_icon(img, size)
                     return img
-                    
                 except Exception as e:
-                    print(f"Failed to load .ico using win32gui: {e}")
-                    # Fall back to PIL
-                    try:
-                        img = Image.open(os.path.join(path, file)).convert("RGBA")
-                        img = img.resize(size, Image.LANCZOS)
-                        return img
-                    except Exception as e:
-                        print(f"Failed to load .ico using PIL: {e}")
-                        continue
-        return None
+                    print(f"Failed to load .ico file: {e}")
+                    continue
+        return create_default_icon(size)
     except Exception as e:
         print(f"Error in get_icon_from_ico_folder: {e}")
-        return None
+        return create_default_icon(size)
 
 def get_file_hash(file_path):
     """Calculate SHA-256 hash of a file"""
@@ -466,161 +421,196 @@ class InitialUpdateDialog(ctk.CTkToplevel):
         )
         self.no_button.pack(side="left", padx=10)
 
-class SettingsWindow(ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("Settings")
-        self.geometry("400x500")
+def create_button(parent, text, width, height, command, fg_color="#2a2a2a", hover_color="#8A2BE2", corner_radius=15, **kwargs):
+    """Create a standardized button with consistent styling"""
+    return ctk.CTkButton(
+        parent,
+        text=text,
+        width=width,
+        height=height,
+        command=command,
+        fg_color=fg_color,
+        hover_color=hover_color,
+        corner_radius=corner_radius,
+        **kwargs
+    )
+
+def create_modal_window(parent, title, width, height):
+    """Create a centered modal window"""
+    window = ctk.CTkToplevel(parent)
+    window.title(title)
+    window.geometry(f"{width}x{height}")
+    window.resizable(False, False)
+    
+    # Make it modal
+    window.transient(parent)
+    window.grab_set()
+    
+    # Center the window
+    window.update_idletasks()
+    x = (window.winfo_screenwidth() // 2) - (width // 2)
+    y = (window.winfo_screenheight() // 2) - (height // 2)
+    window.geometry(f'{width}x{height}+{x}+{y}')
+    
+    return window
+
+def save_custom_icon(source_path, dest_path, size=(128, 128)):
+    """Save a custom icon with proper resizing"""
+    try:
+        pil_img = Image.open(source_path)
+        pil_img = resize_icon(pil_img, size)
+        pil_img.save(dest_path)
+        return True
+    except Exception as e:
+        print(f"Failed to save custom icon: {e}")
+        return False
+
+def rename_mod(old_path, new_path):
+    """Rename a mod folder"""
+    try:
+        os.rename(old_path, new_path)
+        return True
+    except Exception as e:
+        print(f"Failed to rename mod: {e}")
+        return False
+
+class CustomizeMenu(ctk.CTkToplevel):
+    def __init__(self, parent, folder, btn, path):
+        super().__init__()
+        self.parent = parent
+        self.folder = folder
+        self.btn = btn
+        self.path = path
+        self.selected_icon_path = None
+        self.original_img = btn.cget("image")
+        
+        # Create window
+        self.title("Customize Mod")
+        self.geometry("300x250")
         self.resizable(False, False)
         
-        # Store parent reference
-        self.parent = parent
+        # Make it modal
+        self.transient(parent)
+        self.grab_set()
         
-        # Load current settings
-        self.settings = load_settings()
-        self.original_settings = self.settings.copy()
+        # Center the window
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
         
-        # Theme mode
-        self.theme_label = ctk.CTkLabel(self, text="Theme Mode:")
-        self.theme_label.pack(pady=(20, 5))
+        # Check for custom icon
+        self.custom_icon_path = os.path.join(self.path, folder, "custom_icon.png")
+        self.has_custom_icon = os.path.exists(self.custom_icon_path)
         
-        self.theme_var = ctk.StringVar(value="dark" if self.settings["dark_mode"] else "light")
-        self.theme_switch = ctk.CTkSwitch(
-            self, 
-            text="Dark Mode", 
-            variable=self.theme_var,
-            onvalue="dark",
-            offvalue="light",
-            command=self.check_changes
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Rename option
+        rename_frame = ctk.CTkFrame(self)
+        rename_frame.pack(fill="x", padx=10, pady=10)
+        
+        rename_label = ctk.CTkLabel(rename_frame, text="Rename Mod:")
+        rename_label.pack(side="left", padx=5)
+        
+        self.rename_entry = ctk.CTkEntry(rename_frame, width=150)
+        self.rename_entry.insert(0, self.folder)
+        self.rename_entry.pack(side="left", padx=5)
+        
+        # Custom icon option
+        icon_frame = ctk.CTkFrame(self)
+        icon_frame.pack(fill="x", padx=10, pady=10)
+        
+        icon_label = ctk.CTkLabel(icon_frame, text="Custom Icon:")
+        icon_label.pack(side="left", padx=5)
+        
+        self.icon_btn = create_button(
+            icon_frame,
+            "Select Icon",
+            100,
+            30,
+            self.select_icon
         )
-        self.theme_switch.pack(pady=5)
+        self.icon_btn.pack(side="left", padx=5)
         
-        # Auto maximize
-        self.maximize_label = ctk.CTkLabel(self, text="Game Launch Settings:")
-        self.maximize_label.pack(pady=(20, 5))
-        
-        self.maximize_var = ctk.BooleanVar(value=self.settings["auto_maximize"])
-        self.maximize_switch = ctk.CTkSwitch(
-            self, 
-            text="Auto Maximize Game", 
-            variable=self.maximize_var,
-            command=self.check_changes
+        self.remove_btn = create_button(
+            icon_frame,
+            "Remove Icon",
+            100,
+            30,
+            self.remove_icon
         )
-        self.maximize_switch.pack(pady=5)
+        if self.has_custom_icon:
+            self.remove_btn.pack(side="left", padx=5)
         
-        # Layout
-        self.layout_label = ctk.CTkLabel(self, text="Layout Settings:")
-        self.layout_label.pack(pady=(20, 5))
-        
-        self.layout_var = ctk.StringVar(value="grid" if self.settings["grid_layout"] else "list")
-        self.layout_option = ctk.CTkOptionMenu(
+        # Save button
+        self.save_btn = create_button(
             self,
-            values=["Grid Layout", "List Layout"],
-            variable=self.layout_var,
-            fg_color="#2a2a2a",
-            button_color="#8A2BE2",
-            button_hover_color="#9932CC",
-            command=self.check_changes
+            "Save Changes",
+            200,
+            40,
+            self.save_changes
         )
-        self.layout_option.pack(pady=5)
-        
-        # Auto Update
-        self.update_label = ctk.CTkLabel(self, text="Update Settings:")
-        self.update_label.pack(pady=(20, 5))
-        
-        self.update_var = ctk.BooleanVar(value=self.settings["auto_update"])
-        self.update_switch = ctk.CTkSwitch(
-            self, 
-            text="Auto Update", 
-            variable=self.update_var,
-            command=self.check_changes
-        )
-        self.update_switch.pack(pady=5)
-        
-        # Spacer
-        ctk.CTkLabel(self, text="").pack(pady=20)
-        
-        # Buttons
-        self.apply_button = ctk.CTkButton(
-            self,
-            text="Apply Changes",
-            command=self.apply_changes,
-            width=180,
-            height=40,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
-        )
-        self.apply_button.pack(side="left", padx=10, pady=20)
-        
-        self.cancel_button = ctk.CTkButton(
-            self,
-            text="Cancel",
-            command=self.cancel_changes,
-            width=180,
-            height=40,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
-        )
-        self.cancel_button.pack(side="right", padx=10, pady=20)
-        
-        # Initially hide buttons
-        self.apply_button.pack_forget()
-        self.cancel_button.pack_forget()
+        self.save_btn.pack(pady=20)
         
         # Handle window close
-        self.protocol("WM_DELETE_WINDOW", self.cancel_changes)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
     
-    def check_changes(self, *args):
-        # Check if any setting has changed
-        has_changes = (
-            self.settings["dark_mode"] != (self.theme_var.get() == "dark") or
-            self.settings["auto_maximize"] != self.maximize_var.get() or
-            self.settings["grid_layout"] != (self.layout_var.get() == "Grid Layout") or
-            self.settings["auto_update"] != self.update_var.get()
+    def select_icon(self):
+        icon_path = filedialog.askopenfilename(
+            title="Select Icon",
+            filetypes=[("Icon files", "*.ico;*.png;*.jpg;*.jpeg")]
         )
-        
-        # Show/hide buttons based on changes
-        if has_changes:
-            self.apply_button.pack(side="left", padx=10, pady=20)
-            self.cancel_button.pack(side="right", padx=10, pady=20)
-        else:
-            self.apply_button.pack_forget()
-            self.cancel_button.pack_forget()
+        if icon_path:
+            try:
+                pil_img = Image.open(icon_path)
+                pil_img = resize_icon(pil_img, (64, 64))  # Preview at 64x64
+                new_img = ctk.CTkImage(pil_img, size=(64, 64))
+                self.btn.configure(image=new_img)
+                self.selected_icon_path = icon_path
+                self.remove_btn.pack(side="left", padx=5)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load icon: {str(e)}")
     
-    def apply_changes(self):
-        # Update settings with current values
-        self.settings["dark_mode"] = (self.theme_var.get() == "dark")
-        self.settings["auto_maximize"] = self.maximize_var.get()
-        self.settings["grid_layout"] = (self.layout_var.get() == "Grid Layout")
-        self.settings["auto_update"] = self.update_var.get()
-        
-        # Save settings
-        save_settings(self.settings)
-        
-        # Restart the application
-        self.parent.after(100, self.restart_application)
+    def remove_icon(self):
+        if os.path.exists(self.custom_icon_path):
+            try:
+                os.remove(self.custom_icon_path)
+            except:
+                pass
+        self.selected_icon_path = None
+        default_img = ctk.CTkImage(create_default_icon((64, 64)), size=(64, 64))
+        self.btn.configure(image=default_img)
+        self.remove_btn.pack_forget()
+        self.parent.refresh()
     
-    def cancel_changes(self):
-        # Restore original settings
-        self.settings = self.original_settings.copy()
-        save_settings(self.settings)
+    def save_changes(self):
+        # Handle rename
+        new_name = self.rename_entry.get().strip()
+        if new_name and new_name != self.folder:
+            old_path = os.path.join(self.path, self.folder)
+            new_path = os.path.join(self.path, new_name)
+            if not rename_mod(old_path, new_path):
+                messagebox.showerror("Error", "Failed to rename mod")
+                return
+            self.folder = new_name
+        
+        # Handle icon change
+        if self.selected_icon_path:
+            icon_dest = os.path.join(self.path, self.folder, "custom_icon.png")
+            if not save_custom_icon(self.selected_icon_path, icon_dest):
+                messagebox.showerror("Error", "Failed to save icon")
+                return
+        
+        self.parent.refresh()
         self.destroy()
     
-    def restart_application(self):
-        # Get the current file path
-        current_file = os.path.abspath(__file__)
-        
-        # Create a batch file to restart the application
-        batch_file = os.path.join(os.path.dirname(current_file), "restart_settings.bat")
-        with open(batch_file, 'w') as f:
-            f.write('@echo off\n')
-            f.write('timeout /t 1 /nobreak > nul\n')  # Wait 1 second
-            f.write(f'start "" "{current_file}"\n')  # Start the application
-            f.write('del "%~f0"\n')  # Delete this batch file
-        
-        # Start the batch file and exit
-        subprocess.Popen([batch_file], shell=True)
-        self.parent.destroy()
+    def on_close(self):
+        if self.selected_icon_path:
+            self.btn.configure(image=self.original_img)
+        self.destroy()
 
 class Launcher(ctk.CTk):
     def __init__(self):
@@ -645,14 +635,12 @@ class Launcher(ctk.CTk):
         self.top_frame.pack(fill="x", padx=20, pady=(20, 10))
 
         # Add settings button to top frame
-        self.settings_button = ctk.CTkButton(
+        self.settings_button = create_button(
             self.top_frame,
-            text="⚙️",
-            width=40,
-            height=40,
-            command=self.show_settings,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2",
+            "⚙️",
+            40,
+            40,
+            self.show_settings,
             corner_radius=20
         )
         self.settings_button.pack(side="right", padx=(10, 0))
@@ -665,14 +653,12 @@ class Launcher(ctk.CTk):
         self.scroll_frame = ctk.CTkScrollableFrame(self, width=700, height=560)
         self.scroll_frame.pack()
 
-        self.import_button = ctk.CTkButton(
+        self.import_button = create_button(
             self, 
-            text="Import Mod", 
-            corner_radius=20, 
-            command=self.show_import_ui, 
-            width=700,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
+            "Import Mod", 
+            700,
+            40,
+            self.show_import_ui
         )
         self.import_button.pack(pady=10)
 
@@ -869,146 +855,7 @@ class Launcher(ctk.CTk):
         self.refresh()
 
     def show_customize_menu(self, folder, btn):
-        menu = ctk.CTkToplevel(self)
-        menu.title("Customize Mod")
-        menu.geometry("300x250")  # Made taller to accommodate new button
-        menu.resizable(False, False)
-        
-        # Make it modal
-        menu.transient(self)
-        menu.grab_set()
-        
-        # Center the window
-        menu.update_idletasks()
-        width = menu.winfo_width()
-        height = menu.winfo_height()
-        x = (menu.winfo_screenwidth() // 2) - (width // 2)
-        y = (menu.winfo_screenheight() // 2) - (height // 2)
-        menu.geometry(f'{width}x{height}+{x}+{y}')
-        
-        # Store the original icon
-        original_img = btn.cget("image")
-        selected_icon_path = None
-        
-        # Check if there's a custom icon
-        custom_icon_path = os.path.join(self.path, folder, "custom_icon.png")
-        has_custom_icon = os.path.exists(custom_icon_path)
-        
-        # Rename option
-        rename_frame = ctk.CTkFrame(menu)
-        rename_frame.pack(fill="x", padx=10, pady=10)
-        
-        rename_label = ctk.CTkLabel(rename_frame, text="Rename Mod:")
-        rename_label.pack(side="left", padx=5)
-        
-        rename_entry = ctk.CTkEntry(rename_frame, width=150)
-        rename_entry.insert(0, folder)
-        rename_entry.pack(side="left", padx=5)
-        
-        # Custom icon option
-        icon_frame = ctk.CTkFrame(menu)
-        icon_frame.pack(fill="x", padx=10, pady=10)
-        
-        icon_label = ctk.CTkLabel(icon_frame, text="Custom Icon:")
-        icon_label.pack(side="left", padx=5)
-        
-        def select_icon():
-            nonlocal selected_icon_path
-            icon_path = filedialog.askopenfilename(
-                title="Select Icon",
-                filetypes=[("Icon files", "*.ico;*.png;*.jpg;*.jpeg")]
-            )
-            if icon_path:
-                try:
-                    # Load and resize the image
-                    pil_img = Image.open(icon_path)
-                    pil_img = pil_img.resize((32, 32), Image.LANCZOS)
-                    new_img = ctk.CTkImage(pil_img, size=(32, 32))
-                    btn.configure(image=new_img)
-                    selected_icon_path = icon_path
-                    remove_btn.pack(side="left", padx=5)  # Show remove button when new icon is selected
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to load icon: {str(e)}")
-        
-        icon_btn = ctk.CTkButton(
-            icon_frame,
-            text="Select Icon",
-            width=100,
-            command=select_icon,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
-        )
-        icon_btn.pack(side="left", padx=5)
-
-        def remove_icon():
-            nonlocal selected_icon_path
-            if os.path.exists(custom_icon_path):
-                try:
-                    os.remove(custom_icon_path)
-                except:
-                    pass
-            selected_icon_path = None
-            btn.configure(image=original_img)
-            remove_btn.pack_forget()  # Hide remove button
-            self.refresh()
-        
-        remove_btn = ctk.CTkButton(
-            icon_frame,
-            text="Remove Icon",
-            width=100,
-            command=remove_icon,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
-        )
-        if has_custom_icon:
-            remove_btn.pack(side="left", padx=5)
-        
-        # Save button
-        def save_changes():
-            # Handle rename
-            new_name = rename_entry.get().strip()
-            if new_name and new_name != folder:
-                old_path = os.path.join(self.path, folder)
-                new_path = os.path.join(self.path, new_name)
-                try:
-                    os.rename(old_path, new_path)
-                    folder = new_name  # Update folder name for icon saving
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to rename: {str(e)}")
-                    return
-            
-            # Handle icon change
-            if selected_icon_path:
-                try:
-                    pil_img = Image.open(selected_icon_path)
-                    pil_img = pil_img.resize((32, 32), Image.LANCZOS)
-                    icon_dest = os.path.join(self.path, folder, "custom_icon.png")
-                    pil_img.save(icon_dest)
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to save icon: {str(e)}")
-                    return
-            
-            self.refresh()
-            menu.destroy()
-        
-        def on_close():
-            # Restore original icon if changes weren't saved
-            if selected_icon_path:
-                btn.configure(image=original_img)
-            menu.destroy()
-        
-        save_btn = ctk.CTkButton(
-            menu,
-            text="Save Changes",
-            command=save_changes,
-            width=200,
-            fg_color="#2a2a2a",
-            hover_color="#8A2BE2"
-        )
-        save_btn.pack(pady=20)
-        
-        # Handle window close
-        menu.protocol("WM_DELETE_WINDOW", on_close)
+        CustomizeMenu(self, folder, btn, self.path)
 
     def launch_exe(self, folder):
         full_path = os.path.join(self.path, folder)
@@ -1029,6 +876,7 @@ class Launcher(ctk.CTk):
 
     def refresh(self):
         self.folders = get_folders(self.path)
+        self.icon_cache.clear()  # Clear the icon cache when refreshing
         self.update_list()
 
     def show_import_ui(self):
@@ -1262,8 +1110,16 @@ class Launcher(ctk.CTk):
     def show_normal_ui(self):
         for widget in self.winfo_children():
             widget.pack_forget()
-        self.search.pack(pady=(20, 10))
+            
+        # Restore top frame with search and settings
+        self.top_frame.pack(fill="x", padx=20, pady=(20, 10))
+        self.search.pack(side="left", fill="x", expand=True)
+        self.settings_button.pack(side="right", padx=(10, 0))
+        
+        # Restore scroll frame
         self.scroll_frame.pack()
+        
+        # Restore import button
         self.import_button = ctk.CTkButton(
             self, 
             text="Import Mod", 
